@@ -112,3 +112,97 @@ def test_full_pipeline_with_stub_llm():
     )
     assert isinstance(result, dict)
     assert result["name"] == "scrapegraphai"
+
+
+def test_person_defaults():
+    from lidi import Person
+
+    person = Person(full_name="Ada Lovelace")
+    assert person.role is None
+    assert person.linkedin_url is None
+
+
+def test_company_defaults_to_empty_people():
+    from lidi import Company
+
+    company = Company(company_name="Acme")
+    assert company.people == []
+    assert company.jurisdiction is None
+
+
+def test_company_parses_nested_people():
+    from lidi import Company
+
+    company = Company.model_validate(
+        {
+            "company_name": "Acme",
+            "website": "acme.test",
+            "people": [{"full_name": "Ada Lovelace", "role": "CTO"}],
+        }
+    )
+    assert company.people[0].full_name == "Ada Lovelace"
+    assert company.people[0].role == "CTO"
+
+
+def test_company_requires_name():
+    from pydantic import ValidationError
+
+    from lidi import Company
+
+    with pytest.raises(ValidationError):
+        Company.model_validate({"website": "acme.test"})
+
+
+def test_registry_exposes_schemas():
+    from lidi import REGISTRY, Company, Person
+
+    assert REGISTRY["company"] is Company
+    assert REGISTRY["person"] is Person
+
+
+def test_schema_reaches_the_graph():
+    """A schema must be handed to the graph, not silently dropped."""
+    from scrapegraphai.graphs import SmartScraperGraph
+
+    from lidi import Company
+
+    config = build_config()
+    config["llm"]["api_key"] = config["llm"]["api_key"] or "sk-placeholder"
+    graph = SmartScraperGraph(prompt="ping", source=TEST_URL, config=config, schema=Company)
+    assert graph.schema is Company
+
+
+@live_only
+def test_full_pipeline_with_schema():
+    """URL -> Chromium -> ScrapeGraphAI -> LLM -> schema-shaped result."""
+    pytest.importorskip("langchain_community")
+    import tiktoken
+
+    try:
+        tiktoken.encoding_for_model("gpt-4o")
+    except Exception as exc:  # pragma: no cover - depends on network
+        pytest.skip(f"tiktoken could not load its encoding: {exc}")
+
+    from langchain_community.chat_models.fake import FakeListChatModel
+
+    from lidi import Company
+
+    payload = json.dumps(
+        {
+            "company_name": "ScrapeGraphAI",
+            "website": "scrapegraphai.com",
+            "jurisdiction": None,
+            "people": [{"full_name": "Marco Vinciguerra", "role": "Founder"}],
+        }
+    )
+    stub = FakeListChatModel(responses=[payload] * 50)
+
+    result = scrape(
+        url=TEST_URL,
+        prompt="Extract the company and its people.",
+        schema=Company,
+        llm={"model_instance": stub, "model_tokens": 8192},
+    )
+    data = result.model_dump() if hasattr(result, "model_dump") else result
+    assert data["company_name"] == "ScrapeGraphAI"
+    assert data["people"][0]["full_name"] == "Marco Vinciguerra"

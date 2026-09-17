@@ -69,6 +69,35 @@ result = scrape(
 )
 ```
 
+## Structured extraction
+
+Passing a schema constrains the model to it, so you get the same fields every
+time instead of whatever shape the model felt like returning:
+
+```bash
+uv run python examples/scrape.py --schema company https://example.com/about \
+    "Extract the company and its leadership team"
+```
+
+```python
+from lidi import Company, scrape
+
+result = scrape(
+    url="https://example.com/about",
+    prompt="Extract the company and its leadership team",
+    schema=Company,
+)
+```
+
+`Company` collects the firm's name, website, jurisdiction and a list of
+`Person` entries (name, role, LinkedIn URL). Optional fields come back as
+`None` when the page does not state them — `jurisdiction`, for instance, is
+only filled from an explicit legal notice or imprint, not inferred from an
+office address.
+
+Schemas live in `src/lidi/schemas.py`. Add your own by defining a Pydantic
+model there and registering it in `REGISTRY` to expose it to `--schema`.
+
 ## Tests
 
 ```bash
@@ -80,6 +109,7 @@ LIDI_LIVE_TESTS=1 uv run pytest        # also loads a real page
 
 ```
 src/lidi/scraper.py   scrape() and build_config()
+src/lidi/schemas.py   Pydantic schemas for structured extraction
 src/lidi/browser.py   finds a usable Chromium binary
 examples/doctor.py    environment check
 examples/scrape.py    command-line scraper

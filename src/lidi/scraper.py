@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Type
 
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from lidi.browser import find_chromium
 
@@ -48,9 +49,15 @@ def scrape(
     url: str,
     prompt: str,
     model: str | None = None,
+    schema: Type[BaseModel] | None = None,
     **overrides: Any,
 ) -> Any:
     """Scrape ``url`` and answer ``prompt`` against its content.
+
+    Args:
+        schema: An optional Pydantic model. When given, the model is
+            constrained to it and the result comes back with those fields;
+            see :mod:`lidi.schemas`.
 
     Raises:
         MissingAPIKeyError: if no API key is configured and no ready-made
@@ -66,5 +73,5 @@ def scrape(
             "OPENAI_API_KEY=sk-... (or export it in your shell)."
         )
 
-    graph = SmartScraperGraph(prompt=prompt, source=url, config=config)
+    graph = SmartScraperGraph(prompt=prompt, source=url, config=config, schema=schema)
     return graph.run()
