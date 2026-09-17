@@ -7,6 +7,7 @@ The fast tests run offline. The ones that touch the network are opt-in:
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 
@@ -272,3 +273,125 @@ def test_scrape_example_shows_usage():
     )
     assert proc.returncode == 0
     assert "--schema" in proc.stdout
+
+
+# --- batch runs -------------------------------------------------------------
+
+
+def _urls_file(tmp_path, lines):
+    path = tmp_path / "urls.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def test_read_urls_skips_blanks_comments_and_duplicates(tmp_path):
+    from lidi.batch import read_urls
+
+    path = _urls_file(tmp_path, ["https://a.test", "", "# note", "https://a.test", "https://b.test"])
+    assert read_urls(path) == ["https://a.test", "https://b.test"]
+
+
+def test_read_urls_from_csv(tmp_path):
+    from lidi.batch import read_urls
+
+    path = tmp_path / "urls.csv"
+    path.write_text("name,url\nAcme,https://a.test\nBeta,https://b.test\n", encoding="utf-8")
+    assert read_urls(path) == ["https://a.test", "https://b.test"]
+
+
+def test_columns_follow_the_schema():
+    from lidi.batch import columns_for
+
+    from lidi import Company
+
+    cols = columns_for(Company)
+    assert cols[:3] == ["url", "status", "error"]
+    assert "company_name" in cols
+    assert "people_full_name" in cols
+
+
+def test_flatten_makes_one_row_per_person():
+    from lidi.batch import flatten
+
+    from lidi import Company
+
+    rows = list(
+        flatten(
+            "https://a.test",
+            {
+                "company_name": "Acme",
+                "website": "acme.test",
+                "jurisdiction": None,
+                "people": [
+                    {"full_name": "Ada", "role": "CTO", "linkedin_url": None},
+                    {"full_name": "Bob", "role": None, "linkedin_url": None},
+                ],
+            },
+            Company,
+        )
+    )
+    assert len(rows) == 2
+    assert {r["people_full_name"] for r in rows} == {"Ada", "Bob"}
+    assert all(r["company_name"] == "Acme" for r in rows)
+
+
+def test_flatten_handles_a_company_with_no_people():
+    from lidi.batch import flatten
+
+    from lidi import Company
+
+    rows = list(flatten("https://a.test", {"company_name": "Acme", "people": []}, Company))
+    assert len(rows) == 1
+    assert rows[0]["status"] == "ok"
+
+
+def test_batch_records_failures_and_keeps_going(tmp_path, monkeypatch):
+    """One dead URL must not cost the rest of the list."""
+    import lidi.batch as batch_mod
+
+    from lidi import Company
+
+    def fake_scrape(url, prompt, schema=None, **kwargs):
+        if "bad" in url:
+            raise RuntimeError("boom")
+        return {"company_name": f"Co-{url[-1]}", "people": []}
+
+    monkeypatch.setattr(batch_mod, "scrape", fake_scrape)
+    out = tmp_path / "out.csv"
+    result = batch_mod.run_batch(
+        ["https://a.test/1", "https://bad.test/2", "https://c.test/3"],
+        prompt="x",
+        schema=Company,
+        output=out,
+    )
+
+    assert (result.succeeded, result.failed) == (2, 1)
+    rows = list(csv.DictReader(out.open(encoding="utf-8")))
+    assert len(rows) == 3
+    errored = [r for r in rows if r["status"] == "error"]
+    assert len(errored) == 1
+    assert "boom" in errored[0]["error"]
+
+
+def test_batch_resumes_and_skips_completed_urls(tmp_path, monkeypatch):
+    import lidi.batch as batch_mod
+
+    from lidi import Company
+
+    calls: list[str] = []
+
+    def fake_scrape(url, prompt, schema=None, **kwargs):
+        calls.append(url)
+        return {"company_name": "Co", "people": []}
+
+    monkeypatch.setattr(batch_mod, "scrape", fake_scrape)
+    out = tmp_path / "out.csv"
+    urls = ["https://a.test", "https://b.test"]
+
+    batch_mod.run_batch(urls, prompt="x", schema=Company, output=out)
+    assert len(calls) == 2
+
+    second = batch_mod.run_batch(urls + ["https://c.test"], prompt="x", schema=Company, output=out)
+    assert second.skipped == 2
+    assert second.succeeded == 1
+    assert calls[-1] == "https://c.test"

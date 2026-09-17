@@ -119,6 +119,33 @@ office address.
 Schemas live in `src/lidi/schemas.py`. Add your own by defining a Pydantic
 model there and registering it in `REGISTRY` to expose it to `--schema`.
 
+## Scraping a list of sites
+
+For anything past a handful of pages, put the URLs in a file (one per line, or
+a CSV with a `url` column) and run them as a batch:
+
+```bash
+uv run python examples/batch.py urls.txt --schema company -o companies.csv
+```
+
+The output has one row per person, with the company's fields repeated — the
+shape spreadsheets and CRMs expect:
+
+```
+url,status,error,company_name,website,jurisdiction,people_full_name,people_role,people_linkedin_url
+```
+
+Built for long lists, so it assumes the run will be interrupted:
+
+- every row is flushed as it completes, so a crash keeps what it had
+- re-running skips URLs already in the output (`--no-resume` to force)
+- a URL that fails is written with `status=error` and the reason, and the run
+  continues — one dead domain does not cost you the rest
+- `--delay 1` spaces out requests; `--limit 20` tries a slice first
+
+Always start with `--limit 20` on a new list: it shows whether the schema and
+prompt actually fit those pages before you spend hours and tokens on the rest.
+
 ## Tests
 
 ```bash
@@ -133,8 +160,10 @@ src/lidi/scraper.py   scrape() and build_config()
 src/lidi/schemas.py   Pydantic schemas for structured extraction
 src/lidi/providers.py provider -> credentials mapping
 src/lidi/browser.py   finds a usable Chromium binary
+src/lidi/batch.py     batch runs over a list of URLs
 examples/doctor.py    environment check
 examples/scrape.py    command-line scraper
+examples/batch.py     batch CLI
 examples/smoke_test.py  quick offline install check
 tests/                test suite
 ```
