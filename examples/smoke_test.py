@@ -1,14 +1,14 @@
 """Offline check that ScrapeGraphAI is installed and a graph can be built.
 
-Makes no network calls. Falls back to a placeholder key when none is set, so it
-verifies the install rather than your credentials.
+Makes no network calls and needs no API key. For a fuller report — including a
+real page load — run examples/doctor.py instead.
 """
 
 from importlib.metadata import version
 
 from scrapegraphai.graphs import SmartScraperGraph
 
-from lidi import build_config
+from lidi import build_config, find_chromium
 
 if __name__ == "__main__":
     config = build_config()
@@ -24,6 +24,7 @@ if __name__ == "__main__":
     print(f"scrapegraphai: {version('scrapegraphai')}")
     print(f"graph built:   {type(graph).__name__}")
     print(f"model:         {config['llm']['model']}")
+    print(f"chromium:      {find_chromium() or 'Playwright default build'}")
     print(f"api key set:   {has_key}")
     if not has_key:
         print("\nSet OPENAI_API_KEY in .env before running examples/scrape.py")

@@ -7,20 +7,25 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from lidi.browser import find_chromium
+
 load_dotenv()
 
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
+class MissingAPIKeyError(RuntimeError):
+    """Raised when no LLM credentials are configured."""
+
+
 def build_config(model: str | None = None, **overrides: Any) -> dict[str, Any]:
     """Build a ScrapeGraphAI graph config.
 
-    The API key is read from the environment so it never has to be passed around
-    in code. ``model`` follows ScrapeGraphAI's ``provider/name`` form.
+    The API key is read from the environment so it never has to be passed
+    around in code. ``model`` follows ScrapeGraphAI's ``provider/name`` form.
 
-    If ``LIDI_CHROMIUM_PATH`` is set it is handed to Playwright's ``launch()``
-    as ``executable_path``, which is how you point at a Chromium that is already
-    on the machine instead of one Playwright downloaded itself.
+    A Chromium binary is discovered automatically and passed to Playwright as
+    ``executable_path``; see :mod:`lidi.browser`.
     """
     config: dict[str, Any] = {
         "llm": {
@@ -31,9 +36,9 @@ def build_config(model: str | None = None, **overrides: Any) -> dict[str, Any]:
         "headless": True,
     }
 
-    chromium_path = os.environ.get("LIDI_CHROMIUM_PATH")
-    if chromium_path:
-        config["loader_kwargs"] = {"executable_path": chromium_path}
+    chromium = find_chromium()
+    if chromium:
+        config["loader_kwargs"] = {"executable_path": chromium}
 
     config.update(overrides)
     return config
@@ -45,12 +50,21 @@ def scrape(
     model: str | None = None,
     **overrides: Any,
 ) -> Any:
-    """Scrape ``url`` and answer ``prompt`` against its content."""
+    """Scrape ``url`` and answer ``prompt`` against its content.
+
+    Raises:
+        MissingAPIKeyError: if no API key is configured and no ready-made
+            ``model_instance`` was supplied.
+    """
     from scrapegraphai.graphs import SmartScraperGraph
 
-    graph = SmartScraperGraph(
-        prompt=prompt,
-        source=url,
-        config=build_config(model, **overrides),
-    )
+    config = build_config(model, **overrides)
+    llm = config.get("llm", {})
+    if not llm.get("api_key") and "model_instance" not in llm:
+        raise MissingAPIKeyError(
+            "No LLM API key found. Copy .env.example to .env and set "
+            "OPENAI_API_KEY=sk-... (or export it in your shell)."
+        )
+
+    graph = SmartScraperGraph(prompt=prompt, source=url, config=config)
     return graph.run()
