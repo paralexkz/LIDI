@@ -8,6 +8,7 @@ Needs no API key: it verifies the machine, not your credentials.
 
 from __future__ import annotations
 
+import json
 import sys
 from importlib.metadata import version
 
@@ -55,15 +56,24 @@ def main() -> int:
         check("Chromium found", False, str(exc))
         chromium = None
 
-    config = build_config()
+    from lidi.providers import KEYLESS, api_key_env, split_model
 
-    # The graph refuses to build without credentials, so use a placeholder:
+    config = build_config()
+    model = config["llm"]["model"]
+    provider = split_model(model)[0]
+    env_var = api_key_env(model)
+    has_key = bool(config["llm"].get("api_key"))
+
+    # Providers refuse to build without credentials, so use a placeholder here:
     # this checks the LLM wiring, not the key itself.
-    has_key = bool(config["llm"]["api_key"])
-    probe = {**config, "llm": {**config["llm"], "api_key": config["llm"]["api_key"] or "sk-placeholder"}}
+    probe_llm = dict(config["llm"])
+    if env_var and not has_key:
+        probe_llm["api_key"] = "placeholder"
     try:
-        SmartScraperGraph(prompt="ping", source="https://example.com", config=probe)
-        check("LLM config valid", True, f"model {config['llm']['model']}")
+        SmartScraperGraph(
+            prompt="ping", source="https://example.com", config={**config, "llm": probe_llm}
+        )
+        check("LLM config valid", True, f"model {model}")
     except Exception as exc:
         check("LLM config valid", False, str(exc))
 
@@ -95,7 +105,26 @@ def main() -> int:
     else:
         print("[SKIP] Live page fetch — pass --fetch to test it")
 
-    check("OPENAI_API_KEY set", has_key, "" if has_key else "add it to .env before scraping")
+    if provider in KEYLESS and provider == "ollama":
+        base_url = config["llm"].get("base_url", "")
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(f"{base_url}/api/tags", timeout=5) as resp:
+                models = json.loads(resp.read()).get("models", [])
+            names = [m.get("name", "") for m in models]
+            wanted = split_model(model)[1]
+            installed = any(n == wanted or n.startswith(f"{wanted}:") for n in names)
+            check("Ollama reachable", True, f"{base_url}, {len(names)} model(s)")
+            check(
+                f"Model '{wanted}' pulled",
+                installed,
+                "" if installed else f"run: ollama pull {wanted}",
+            )
+        except Exception as exc:
+            check("Ollama reachable", False, f"{base_url} — {exc}. Is `ollama serve` running?")
+    elif env_var:
+        check(f"{env_var} set", has_key, "" if has_key else "add it to .env before scraping")
 
     print()
     if _ok:

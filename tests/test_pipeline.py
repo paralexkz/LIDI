@@ -43,19 +43,49 @@ def test_chromium_is_available():
         assert os.path.exists(chromium)
 
 
-def test_graph_builds_with_placeholder_key():
+def test_graph_builds_with_default_provider():
     from scrapegraphai.graphs import SmartScraperGraph
 
     config = build_config()
-    config["llm"]["api_key"] = config["llm"]["api_key"] or "sk-placeholder"
+    if "api_key" in config["llm"]:
+        config["llm"]["api_key"] = config["llm"]["api_key"] or "placeholder"
     graph = SmartScraperGraph(prompt="ping", source=TEST_URL, config=config)
     assert graph is not None
 
 
-def test_scrape_without_key_raises(monkeypatch):
+def test_scrape_without_key_raises_for_hosted_provider(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(MissingAPIKeyError):
-        scrape(url=TEST_URL, prompt="anything")
+    with pytest.raises(MissingAPIKeyError) as excinfo:
+        scrape(url=TEST_URL, prompt="anything", model="openai/gpt-4o-mini")
+    assert "OPENAI_API_KEY" in str(excinfo.value)
+
+
+def test_keyless_provider_does_not_require_a_key(monkeypatch):
+    """Ollama runs locally, so a missing key must not block the call."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config = build_config("ollama/llama3.1")
+    assert "api_key" not in config["llm"]
+    assert config["llm"]["base_url"].startswith("http")
+
+
+def test_ollama_host_is_overridable(monkeypatch):
+    monkeypatch.setenv("LIDI_OLLAMA_HOST", "http://example.test:1234")
+    assert build_config("ollama/llama3.1")["llm"]["base_url"] == "http://example.test:1234"
+
+
+def test_api_key_env_per_provider():
+    from lidi.providers import api_key_env, split_model
+
+    assert api_key_env("openai/gpt-4o-mini") == "OPENAI_API_KEY"
+    assert api_key_env("anthropic/claude-sonnet-4-5") == "ANTHROPIC_API_KEY"
+    assert api_key_env("ollama/llama3.1") is None
+    assert split_model("gpt-4o-mini") == ("openai", "gpt-4o-mini")
+    assert split_model("ollama/llama3.1") == ("ollama", "llama3.1")
+
+
+def test_hosted_provider_reads_its_own_key(monkeypatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    assert build_config("mistralai/mistral-small")["llm"]["api_key"] == "test-key"
 
 
 def test_chromium_launches():
@@ -167,7 +197,8 @@ def test_schema_reaches_the_graph():
     from lidi import Company
 
     config = build_config()
-    config["llm"]["api_key"] = config["llm"]["api_key"] or "sk-placeholder"
+    if "api_key" in config["llm"]:
+        config["llm"]["api_key"] = config["llm"]["api_key"] or "placeholder"
     graph = SmartScraperGraph(prompt="ping", source=TEST_URL, config=config, schema=Company)
     assert graph.schema is Company
 
@@ -206,3 +237,38 @@ def test_full_pipeline_with_schema():
     data = result.model_dump() if hasattr(result, "model_dump") else result
     assert data["company_name"] == "ScrapeGraphAI"
     assert data["people"][0]["full_name"] == "Marco Vinciguerra"
+
+
+def test_smoke_test_example_runs():
+    """examples/smoke_test.py must work for keyless and hosted providers alike."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for model in ("ollama/llama3.1", "openai/gpt-4o-mini"):
+        proc = subprocess.run(
+            [sys.executable, str(root / "examples" / "smoke_test.py")],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "LIDI_MODEL": model},
+            cwd=root,
+        )
+        assert proc.returncode == 0, f"{model}: {proc.stderr[-500:]}"
+        assert "graph built" in proc.stdout
+
+
+def test_scrape_example_shows_usage():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, str(root / "examples" / "scrape.py"), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    assert proc.returncode == 0
+    assert "--schema" in proc.stdout

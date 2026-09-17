@@ -8,7 +8,8 @@ browser and returns structured data.
 
 - Python 3.12+ — ScrapeGraphAI 2.x requires `>=3.12,<4.0`
 - [uv](https://docs.astral.sh/uv/)
-- An OpenAI API key
+- [Ollama](https://ollama.com) running locally — the default, no API key needed.
+  Any hosted provider works too; see *Using a hosted provider* below.
 
 ## Install
 
@@ -18,20 +19,40 @@ uv sync                         # installs everything, incl. ScrapeGraphAI 2.2.4
 uv run playwright install chromium
 ```
 
+Then the model, which runs on your own machine:
+
+```bash
+ollama pull llama3.1            # needs Ollama installed: https://ollama.com
+ollama serve                    # skip if it already runs as a service
+```
+
 ## Configure
+
+Nothing is required — the defaults point at a local Ollama on
+`http://localhost:11434`. To change the model or the host:
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and set your key:
+`.env` is git-ignored, so nothing in it gets committed. Every setting
+(`LIDI_MODEL`, `LIDI_OLLAMA_HOST`, `LIDI_CHROMIUM_PATH`, provider keys) is
+documented there.
 
-```
-OPENAI_API_KEY=sk-...
-```
+### Using a hosted provider
 
-`.env` is git-ignored, so the key never gets committed. Optional settings
-(`LIDI_MODEL`, `LIDI_CHROMIUM_PATH`) are documented in `.env.example`.
+Set `LIDI_MODEL` to `provider/name` and supply that provider's key. LIDI picks
+the right environment variable from the prefix:
+
+| `LIDI_MODEL`                    | Key variable        |
+| ------------------------------- | ------------------- |
+| `ollama/llama3.1` *(default)*   | none — runs locally |
+| `openai/gpt-4o-mini`            | `OPENAI_API_KEY`    |
+| `anthropic/claude-sonnet-4-5`   | `ANTHROPIC_API_KEY` |
+| `mistralai/mistral-small`       | `MISTRAL_API_KEY`   |
+
+Anthropic and Google need one extra package (`uv add langchain-anthropic` or
+`uv add langchain-google-genai`); OpenAI, Mistral and Ollama work out of the box.
 
 ## Check the setup
 
@@ -40,8 +61,8 @@ uv run python examples/doctor.py --fetch
 ```
 
 This verifies each link in the chain — Python version, ScrapeGraphAI import,
-Chromium discovery, LLM config, browser launch, and a real page load — and says
-which part is broken if any. It needs no API key.
+Chromium discovery, LLM config, browser launch, a real page load, and whether
+Ollama is up with your model pulled — and says which part is broken if any.
 
 ## Run a scrape
 
@@ -110,6 +131,7 @@ LIDI_LIVE_TESTS=1 uv run pytest        # also loads a real page
 ```
 src/lidi/scraper.py   scrape() and build_config()
 src/lidi/schemas.py   Pydantic schemas for structured extraction
+src/lidi/providers.py provider -> credentials mapping
 src/lidi/browser.py   finds a usable Chromium binary
 examples/doctor.py    environment check
 examples/scrape.py    command-line scraper
@@ -119,10 +141,19 @@ tests/                test suite
 
 ## Troubleshooting
 
-### `No LLM API key found`
+### `Ollama reachable — Connection refused`
 
-`.env` is missing or `OPENAI_API_KEY` is empty. `cp .env.example .env` and put
-your key in it.
+The local model server is not running. Start it with `ollama serve`, or point
+`LIDI_OLLAMA_HOST` at wherever it listens.
+
+### `Model 'llama3.1' pulled — FAIL`
+
+The model is not downloaded yet: `ollama pull llama3.1`.
+
+### `No API key found for provider '...'`
+
+You switched `LIDI_MODEL` to a hosted provider. Set that provider's key in
+`.env` — the table above says which variable.
 
 ### `Looks like Playwright was just installed or updated... run playwright install`
 
@@ -163,7 +194,7 @@ your network.
 
 ### `ProxyError ... openaipublic.blob.core.windows.net`
 
-`tiktoken` downloads its tokenizer data on first use and that host is
-unreachable. It is cached afterwards, so this only affects the first run on a
-restricted network. Allow the host, or run the first scrape from a network that
-permits it.
+ScrapeGraphAI counts tokens with `tiktoken`, which downloads its vocabulary on
+first use — it does this **for every provider, including local Ollama**, so the
+first run needs access to that host even when nothing else leaves your machine.
+It is cached afterwards.

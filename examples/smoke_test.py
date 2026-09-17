@@ -1,7 +1,7 @@
 """Offline check that ScrapeGraphAI is installed and a graph can be built.
 
-Makes no network calls and needs no API key. For a fuller report — including a
-real page load — run examples/doctor.py instead.
+Makes no network calls. For a fuller report — including a real page load and
+whether the model server is up — run examples/doctor.py instead.
 """
 
 from importlib.metadata import version
@@ -9,22 +9,30 @@ from importlib.metadata import version
 from scrapegraphai.graphs import SmartScraperGraph
 
 from lidi import build_config, find_chromium
+from lidi.providers import api_key_env
 
 if __name__ == "__main__":
     config = build_config()
-    has_key = bool(config["llm"]["api_key"])
-    if not has_key:
-        config["llm"]["api_key"] = "sk-placeholder"
+    model = config["llm"]["model"]
+    env_var = api_key_env(model)
+    has_key = bool(config["llm"].get("api_key"))
+
+    # Hosted providers refuse to build without credentials; a placeholder keeps
+    # this an install check rather than a credentials check.
+    llm = dict(config["llm"])
+    if env_var and not has_key:
+        llm["api_key"] = "placeholder"
 
     graph = SmartScraperGraph(
         prompt="What is this page about?",
         source="https://example.com",
-        config=config,
+        config={**config, "llm": llm},
     )
     print(f"scrapegraphai: {version('scrapegraphai')}")
     print(f"graph built:   {type(graph).__name__}")
-    print(f"model:         {config['llm']['model']}")
+    print(f"model:         {model}")
     print(f"chromium:      {find_chromium() or 'Playwright default build'}")
-    print(f"api key set:   {has_key}")
-    if not has_key:
-        print("\nSet OPENAI_API_KEY in .env before running examples/scrape.py")
+    if env_var:
+        print(f"{env_var}: {'set' if has_key else 'MISSING — add it to .env'}")
+    else:
+        print(f"credentials:   none needed for this provider")
